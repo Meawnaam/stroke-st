@@ -165,36 +165,21 @@ def preprocess_image(uploaded_file) -> np.ndarray:
 # =====================================================
 def predict(model, img_array: np.ndarray) -> dict:
     """
-    Run prediction and handle all possible output shapes.
+    Run prediction - confirmed output shape: (1, 2)
+    values: [[no_stroke_prob, stroke_prob]]
     """
     raw_predictions = model.predict(img_array, verbose=0)
 
-    # แปลงเป็น float32 ก่อน (mixed_float16 อาจ return float16)
+    # แปลงเป็น float32 (mixed_float16 → float32)
     predictions = raw_predictions.astype(np.float32)
 
-    shape = predictions.shape
-    ndim  = predictions.ndim
+    # Flatten → 1D array
+    # (1, 2) → [no_stroke_prob, stroke_prob]
+    flat = predictions.flatten()
 
-    # --- Debug แสดง shape จริง ---
-    st.write(f"🔍 shape: `{shape}` | ndim: `{ndim}`")
-    st.write(f"🔍 values: `{predictions}`")
-
-    # --- Flatten ให้เป็น 1D ก่อนเสมอ ---
-    flat = predictions.flatten()   # shape ใดก็ได้ → (N,)
-    n    = len(flat)
-
-    if n == 1:
-        # Binary sigmoid → single probability
-        stroke_prob    = float(flat)
-        no_stroke_prob = 1.0 - stroke_prob
-
-    elif n >= 2:
-        # Categorical → [no_stroke, stroke]
-        no_stroke_prob = float(flat)
-        stroke_prob    = float(flat)
-
-    else:
-        raise ValueError(f"Unexpected prediction output: shape={shape}, values={flat}")
+    # ดึงค่าแต่ละตัวด้วย index
+    no_stroke_prob = float(flat)   # index 0 = no_stroke
+    stroke_prob    = float(flat)   # index 1 = stroke
 
     # Clamp ให้อยู่ใน [0, 1]
     stroke_prob    = float(np.clip(stroke_prob,    0.0, 1.0))
@@ -211,7 +196,7 @@ def predict(model, img_array: np.ndarray) -> dict:
         "confidence"      : confidence,
         "stroke_prob"     : stroke_prob,
         "no_stroke_prob"  : no_stroke_prob,
-        "raw_shape"       : str(shape),
+        "raw_shape"       : str(predictions.shape),
         "raw_values"      : predictions.tolist(),
     }
 
