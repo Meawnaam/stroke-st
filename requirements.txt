@@ -1,5 +1,5 @@
 streamlit
-tensorflow
-numpy
+tensorflow==2.10.0
+numpy<1.24 # Ensure numpy is compatible with TF 2.10
 requests
-Pillow # For image loading and processing
+Pillow
