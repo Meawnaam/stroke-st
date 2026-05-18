@@ -17,20 +17,13 @@ st.set_page_config(
 )
 
 # =====================================================
-# CONSTANTS — ตรงกับ training code จริง
+# CONSTANTS
 # =====================================================
-IMG_SIZE       = (224, 224)
-MODEL_FILENAME = "Imp_ENSStrokeNet35.keras"
-FILE_ID        = "1PyI0XiQh7dZPj9_jq1h85uZMmbT43ZSS"
-MODEL_PATH     = f"/tmp/{MODEL_FILENAME}"
-
-# class_names จาก test_generator.class_indices
-# flow_from_directory เรียงตาม alphabet
-# ตรวจสอบจาก: print("Class Names:", class_names)
-CLASS_NAMES    = ['no_stroke', 'stroke']   # ← ปรับถ้า print ได้ต่างกัน
-
-# Threshold เดียวกับ training code
-# predicted_label_idx = 1 if predictions[i] > 0.55 else 0
+IMG_SIZE         = (224, 224)
+MODEL_FILENAME   = "Imp_ENSStrokeNet35.keras"
+FILE_ID          = "1PyI0XiQh7dZPj9_jq1h85uZMmbT43ZSS"
+MODEL_PATH       = f"/tmp/{MODEL_FILENAME}"
+CLASS_NAMES      = ['no_stroke', 'stroke']
 STROKE_THRESHOLD = 0.55
 
 # =====================================================
@@ -81,8 +74,7 @@ def download_model() -> bool:
 
 
 # =====================================================
-# LOAD MODEL — ตรงกับ training code
-# mixed_precision + tf.keras.models.load_model
+# LOAD MODEL
 # =====================================================
 @st.cache_resource(show_spinner=False)
 def load_model():
@@ -109,7 +101,7 @@ def load_model():
         size_mb = os.path.getsize(MODEL_PATH) / (1024 * 1024)
         st.info(f"📁 Using cached model ({size_mb:.1f} MB)")
 
-    # --- Attempt 1: tf.keras (เหมือน training code) ---
+    # --- Attempt 1: tf.keras ---
     try:
         with st.spinner("🔄 Loading model (1/3 — tf.keras)..."):
             model = tf.keras.models.load_model(MODEL_PATH)
@@ -123,7 +115,7 @@ def load_model():
         with st.spinner("🔄 Loading model (2/3 — compile=False)..."):
             model = tf.keras.models.load_model(
                 MODEL_PATH,
-                compile = False
+                compile=False
             )
         st.success("✅ Model loaded! (compile=False)")
         return model
@@ -135,7 +127,7 @@ def load_model():
         with st.spinner("🔄 Loading model (3/3 — keras native)..."):
             model = keras.models.load_model(
                 MODEL_PATH,
-                compile = False
+                compile=False
             )
         st.success("✅ Model loaded! (keras native)")
         return model
@@ -150,59 +142,89 @@ def load_model():
 
 # =====================================================
 # PREPROCESSING — ตรงกับ training code
-# img_array / 255.0 → astype('float16')
 # =====================================================
 def preprocess_image(uploaded_file) -> np.ndarray:
     """
     Preprocess image exactly as in training:
-    - Resize to (224, 224)
-    - Normalize to [0, 1]
-    - Cast to float16 (mixed precision)
-    - Expand dims → (1, 224, 224, 3)
+      - Resize    : (224, 224)
+      - Normalize : / 255.0
+      - dtype     : float16
+      - Shape     : (1, 224, 224, 3)
     """
     img       = Image.open(uploaded_file).convert("RGB")
     img       = img.resize(IMG_SIZE, Image.LANCZOS)
     img_array = np.array(img, dtype=np.float32)
-    img_array = img_array / 255.0              # rescale=1./255
-    img_array = img_array.astype('float16')    # astype('float16')
-    img_array = np.expand_dims(img_array, axis=0)  # (1, 224, 224, 3)
+    img_array = img_array / 255.0
+    img_array = img_array.astype('float16')
+    img_array = np.expand_dims(img_array, axis=0)
     return img_array
 
 
 # =====================================================
-# PREDICT — ตรงกับ training code
-# predicted_label_idx = 1 if predictions[i] > 0.55 else 0
+# PREDICT — handle ทุก output shape
 # =====================================================
 def predict(model, img_array: np.ndarray) -> dict:
     """
-    Predict using same logic as training code:
-    - predictions shape: (1, 2) → categorical
-    - Use threshold 0.55 for stroke class (index 1)
+    Run prediction and handle all possible output shapes:
+      - (1, 2) → Categorical softmax  [no_stroke, stroke]
+      - (1, 1) → Binary sigmoid
+      - (2,)   → Flat array
+      - (1,)   → Single value
     """
-    predictions = model.predict(img_array, verbose=0)
+    raw_predictions = model.predict(img_array, verbose=0)
 
-    # ดึง probability ของแต่ละ class
-    # predictions[i] = no_stroke prob
-    # predictions[i] = stroke prob
-    stroke_prob   = float(predictions)
-    no_stroke_prob = float(predictions)
+    # แปลงเป็น float32 ก่อน (mixed_float16 อาจ return float16)
+    predictions = raw_predictions.astype(np.float32)
 
-    # ใช้ threshold 0.55 เหมือน training code
-    # predicted_label_idx = 1 if predictions[i] > 0.55 else 0
+    shape = predictions.shape
+
+    # --- Handle ทุก shape ---
+    if predictions.ndim == 1:
+        # Shape: (N,)
+        if len(predictions) == 1:
+            # Single sigmoid
+            stroke_prob    = float(predictions)
+            no_stroke_prob = 1.0 - stroke_prob
+        elif len(predictions) >= 2:
+            # Flat categorical [no_stroke, stroke]
+            no_stroke_prob = float(predictions)
+            stroke_prob    = float(predictions)
+        else:
+            raise ValueError(f"Unexpected shape: {shape}")
+
+    elif predictions.ndim == 2:
+        # Shape: (1, N)
+        if predictions.shape == 1:
+            # Single sigmoid
+            stroke_prob    = float(predictions[0, 0])
+            no_stroke_prob = 1.0 - stroke_prob
+        elif predictions.shape >= 2:
+            # Categorical [no_stroke, stroke]
+            no_stroke_prob = float(predictions[0, 0])
+            stroke_prob    = float(predictions[0, 1])
+        else:
+            raise ValueError(f"Unexpected shape: {shape}")
+
+    else:
+        raise ValueError(f"Unexpected ndim: {predictions.ndim}, shape: {shape}")
+
+    # Clamp ให้อยู่ใน [0, 1]
+    stroke_prob    = float(np.clip(stroke_prob,    0.0, 1.0))
+    no_stroke_prob = float(np.clip(no_stroke_prob, 0.0, 1.0))
+
+    # ใช้ threshold 0.55 เหมือน training
     predicted_index = 1 if stroke_prob > STROKE_THRESHOLD else 0
     predicted_class = CLASS_NAMES[predicted_index]
-
-    # Confidence = probability ของ predicted class
-    confidence = stroke_prob if predicted_index == 1 else no_stroke_prob
+    confidence      = stroke_prob if predicted_index == 1 else no_stroke_prob
 
     return {
-        "predicted_class"  : predicted_class,
-        "predicted_index"  : predicted_index,
-        "confidence"       : confidence,
-        "stroke_prob"      : stroke_prob,
-        "no_stroke_prob"   : no_stroke_prob,
-        "raw_shape"        : str(predictions.shape),
-        "raw_values"       : predictions.tolist(),
+        "predicted_class" : predicted_class,
+        "predicted_index" : predicted_index,
+        "confidence"      : confidence,
+        "stroke_prob"     : stroke_prob,
+        "no_stroke_prob"  : no_stroke_prob,
+        "raw_shape"       : str(shape),
+        "raw_values"      : predictions.tolist(),
     }
 
 
@@ -253,7 +275,7 @@ if model is None:
     )
     st.stop()
 
-# Model info
+# Model info sidebar
 with st.sidebar:
     with st.expander("📊 Model Info"):
         try:
@@ -299,7 +321,7 @@ if uploaded_file is not None:
         st.markdown("**Prediction Result:**")
 
         try:
-            # Preprocess — เหมือน training
+            # Preprocess
             img_array = preprocess_image(uploaded_file)
 
             # Predict
@@ -311,7 +333,7 @@ if uploaded_file is not None:
             stroke_prob     = result["stroke_prob"]
             no_stroke_prob  = result["no_stroke_prob"]
 
-            # ----- Result Display -----
+            # ----- Result -----
             if predicted_class == "stroke":
                 st.error("🔴 **Stroke Detected**")
                 st.metric(
@@ -335,7 +357,6 @@ if uploaded_file is not None:
 
             # ----- Probability Bars -----
             st.markdown("**Class Probabilities:**")
-
             st.progress(
                 value = float(no_stroke_prob),
                 text  = f"No Stroke : {no_stroke_prob * 100:.2f}%"
@@ -344,25 +365,23 @@ if uploaded_file is not None:
                 value = float(stroke_prob),
                 text  = f"Stroke    : {stroke_prob * 100:.2f}%"
             )
-
-            # Threshold indicator
             st.caption(
                 f"ℹ️ Stroke threshold: `{STROKE_THRESHOLD}` "
-                f"(stroke if prob > {STROKE_THRESHOLD})"
+                f"(predicted as stroke if prob > {STROKE_THRESHOLD})"
             )
 
             # ----- Raw Debug -----
             with st.expander("🔍 Raw Prediction Details"):
                 st.json({
-                    "output_shape"  : result["raw_shape"],
-                    "raw_values"    : result["raw_values"],
-                    "no_stroke_prob": f"{no_stroke_prob:.6f}",
-                    "stroke_prob"   : f"{stroke_prob:.6f}",
-                    "threshold"     : STROKE_THRESHOLD,
-                    "decision"      : (
-                        f"stroke_prob ({stroke_prob:.4f}) "
-                        f"> threshold ({STROKE_THRESHOLD}) "
-                        f"= {stroke_prob > STROKE_THRESHOLD}"
+                    "output_shape"   : result["raw_shape"],
+                    "raw_values"     : result["raw_values"],
+                    "no_stroke_prob" : f"{no_stroke_prob:.6f}",
+                    "stroke_prob"    : f"{stroke_prob:.6f}",
+                    "threshold"      : STROKE_THRESHOLD,
+                    "decision"       : (
+                        f"stroke_prob ({stroke_prob:.4f}) > "
+                        f"threshold ({STROKE_THRESHOLD}) = "
+                        f"{stroke_prob > STROKE_THRESHOLD}"
                     ),
                 })
 
@@ -374,10 +393,20 @@ else:
     st.info("👆 Please upload a brain MRI image to get started.")
     st.markdown("---")
     st.markdown("#### How it works:")
+
     col_a, col_b, col_c = st.columns(3)
     with col_a:
-        st.markdown("**1️⃣ Upload**\n\nChoose a brain MRI image (JPG/PNG)")
+        st.markdown(
+            "**1️⃣ Upload**\n\n"
+            "Choose a brain MRI image (JPG/PNG)"
+        )
     with col_b:
-        st.markdown("**2️⃣ Analyze**\n\nModel processes the image automatically")
+        st.markdown(
+            "**2️⃣ Analyze**\n\n"
+            "Model processes the image automatically"
+        )
     with col_c:
-        st.markdown("**3️⃣ Result**\n\nGet prediction with confidence score")
+        st.markdown(
+            "**3️⃣ Result**\n\n"
+            "Get prediction with confidence score"
+        )
