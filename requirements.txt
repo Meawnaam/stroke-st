@@ -1,0 +1,5 @@
+streamlit
+tensorflow
+numpy
+requests
+Pillow # For image loading and processing
