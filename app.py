@@ -1,6 +1,4 @@
 import os
-
-# ต้อง set ก่อน import tensorflow/keras
 os.environ["KERAS_BACKEND"] = "tensorflow"
 
 import streamlit as st
@@ -54,8 +52,7 @@ def download_model() -> bool:
             with open(MODEL_PATH, "r", errors="ignore") as f:
                 preview = f.read(300)
             st.error(
-                f"❌ File too small ({size_mb:.2f} MB) — "
-                "likely an HTML error page.\n\n"
+                f"❌ File too small ({size_mb:.2f} MB)\n\n"
                 f"**Preview:**\n```\n{preview}\n```\n\n"
                 "Please share the file as **'Anyone with the link'**."
             )
@@ -78,7 +75,7 @@ def download_model() -> bool:
 # =====================================================
 @st.cache_resource(show_spinner=False)
 def load_model():
-    """Load model with mixed_float16 precision — same as training."""
+    """Load model with mixed_float16 — same as training."""
     import tensorflow as tf
     from tensorflow.keras import mixed_precision
     import keras
@@ -88,11 +85,9 @@ def load_model():
         f"Keras: `{keras.__version__}`"
     )
 
-    # Set mixed precision — เหมือนกับตอน train
     mixed_precision.set_global_policy('mixed_float16')
-    st.info("🔧 Mixed precision policy: `mixed_float16`")
+    st.info("🔧 Mixed precision: `mixed_float16`")
 
-    # Download ถ้าไม่มีไฟล์
     if not os.path.exists(MODEL_PATH):
         success = download_model()
         if not success:
@@ -101,7 +96,7 @@ def load_model():
         size_mb = os.path.getsize(MODEL_PATH) / (1024 * 1024)
         st.info(f"📁 Using cached model ({size_mb:.1f} MB)")
 
-    # --- Attempt 1: tf.keras ---
+    # Attempt 1: tf.keras
     try:
         with st.spinner("🔄 Loading model (1/3 — tf.keras)..."):
             model = tf.keras.models.load_model(MODEL_PATH)
@@ -110,25 +105,19 @@ def load_model():
     except Exception as e1:
         st.warning(f"⚠️ Attempt 1 failed: {e1}")
 
-    # --- Attempt 2: tf.keras compile=False ---
+    # Attempt 2: tf.keras compile=False
     try:
         with st.spinner("🔄 Loading model (2/3 — compile=False)..."):
-            model = tf.keras.models.load_model(
-                MODEL_PATH,
-                compile=False
-            )
+            model = tf.keras.models.load_model(MODEL_PATH, compile=False)
         st.success("✅ Model loaded! (compile=False)")
         return model
     except Exception as e2:
         st.warning(f"⚠️ Attempt 2 failed: {e2}")
 
-    # --- Attempt 3: keras native ---
+    # Attempt 3: keras native
     try:
         with st.spinner("🔄 Loading model (3/3 — keras native)..."):
-            model = keras.models.load_model(
-                MODEL_PATH,
-                compile=False
-            )
+            model = keras.models.load_model(MODEL_PATH, compile=False)
         st.success("✅ Model loaded! (keras native)")
         return model
     except Exception as e3:
@@ -141,15 +130,15 @@ def load_model():
 
 
 # =====================================================
-# PREPROCESSING — ตรงกับ training code
+# PREPROCESSING — ตรงกับ training
 # =====================================================
 def preprocess_image(uploaded_file) -> np.ndarray:
     """
-    Preprocess image exactly as in training:
-      - Resize    : (224, 224)
-      - Normalize : / 255.0
-      - dtype     : float16
-      - Shape     : (1, 224, 224, 3)
+    Preprocess exactly as training:
+      - Resize  : (224, 224)
+      - Rescale : / 255.0
+      - dtype   : float16
+      - Shape   : (1, 224, 224, 3)
     """
     img       = Image.open(uploaded_file).convert("RGB")
     img       = img.resize(IMG_SIZE, Image.LANCZOS)
@@ -161,31 +150,30 @@ def preprocess_image(uploaded_file) -> np.ndarray:
 
 
 # =====================================================
-# PREDICT — handle ทุก output shape
+# PREDICT — confirmed shape (1, 2)
 # =====================================================
 def predict(model, img_array: np.ndarray) -> dict:
     """
-    Run prediction - confirmed output shape: (1, 2)
-    values: [[no_stroke_prob, stroke_prob]]
+    Predict — output shape confirmed: (1, 2)
+    flat = no_stroke prob
+    flat = stroke prob
     """
     raw_predictions = model.predict(img_array, verbose=0)
 
-    # แปลงเป็น float32 (mixed_float16 → float32)
+    # float16 → float32
     predictions = raw_predictions.astype(np.float32)
 
-    # Flatten → 1D array
-    # (1, 2) → [no_stroke_prob, stroke_prob]
+    # Flatten: (1, 2) → [no_stroke_prob, stroke_prob]
     flat = predictions.flatten()
 
-    # ดึงค่าแต่ละตัวด้วย index
-    no_stroke_prob = float(flat)   # index 0 = no_stroke
-    stroke_prob    = float(flat)   # index 1 = stroke
+    no_stroke_prob = float(flat)
+    stroke_prob    = float(flat)
 
-    # Clamp ให้อยู่ใน [0, 1]
+    # Clamp [0, 1]
     stroke_prob    = float(np.clip(stroke_prob,    0.0, 1.0))
     no_stroke_prob = float(np.clip(no_stroke_prob, 0.0, 1.0))
 
-    # Threshold 0.55 เหมือน training
+    # Threshold 0.55
     predicted_index = 1 if stroke_prob > STROKE_THRESHOLD else 0
     predicted_class = CLASS_NAMES[predicted_index]
     confidence      = stroke_prob if predicted_index == 1 else no_stroke_prob
@@ -248,7 +236,6 @@ if model is None:
     )
     st.stop()
 
-# Model info sidebar
 with st.sidebar:
     with st.expander("📊 Model Info"):
         try:
@@ -280,7 +267,6 @@ if uploaded_file is not None:
 
     col1, col2 = st.columns(2)
 
-    # ----- Column 1: Image -----
     with col1:
         st.markdown("**Uploaded Image:**")
         st.image(
@@ -289,15 +275,12 @@ if uploaded_file is not None:
             use_container_width = True,
         )
 
-    # ----- Column 2: Prediction -----
     with col2:
         st.markdown("**Prediction Result:**")
 
         try:
-            # Preprocess
             img_array = preprocess_image(uploaded_file)
 
-            # Predict
             with st.spinner("🔍 Analyzing image..."):
                 result = predict(model, img_array)
 
@@ -306,7 +289,7 @@ if uploaded_file is not None:
             stroke_prob     = result["stroke_prob"]
             no_stroke_prob  = result["no_stroke_prob"]
 
-            # ----- Result -----
+            # Result
             if predicted_class == "stroke":
                 st.error("🔴 **Stroke Detected**")
                 st.metric(
@@ -328,7 +311,7 @@ if uploaded_file is not None:
                     "This is a model prediction, not medical advice."
                 )
 
-            # ----- Probability Bars -----
+            # Probability bars
             st.markdown("**Class Probabilities:**")
             st.progress(
                 value = float(no_stroke_prob),
@@ -340,10 +323,10 @@ if uploaded_file is not None:
             )
             st.caption(
                 f"ℹ️ Stroke threshold: `{STROKE_THRESHOLD}` "
-                f"(predicted as stroke if prob > {STROKE_THRESHOLD})"
+                f"(stroke if prob > {STROKE_THRESHOLD})"
             )
 
-            # ----- Raw Debug -----
+            # Raw debug
             with st.expander("🔍 Raw Prediction Details"):
                 st.json({
                     "output_shape"   : result["raw_shape"],
