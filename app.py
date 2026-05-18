@@ -1,117 +1,221 @@
 import streamlit as st
-import tensorflow as tf
-from tensorflow.keras import mixed_precision
-from tensorflow.keras.preprocessing import image
-import numpy as np
 import os
-import requests
-import zipfile
-import io
+import numpy as np
+from PIL import Image
 
-# --- Configuration ---
-# Set mixed precision policy early if using GPU,
-# otherwise, it might not be beneficial on CPU and could cause issues.
-# For Streamlit Cloud (CPU-only usually), mixed_float16 might not offer much benefit
-# and can sometimes cause compatibility issues if not carefully managed.
-# It's often safer to stick to float32 on CPU-only deployments unless you
-# specifically test and confirm its stability and performance gains.
-# For this example, I'll keep it commented out for simplicity unless
-# you know your model absolutely requires it and the environment supports it.
-# mixed_precision.set_global_policy('mixed_float16')
+# =====================================================
+# PAGE CONFIG (ต้องเป็น st command แรกเสมอ)
+# =====================================================
+st.set_page_config(
+    page_title="Stroke Detection - ENSStrokeNet35",
+    page_icon="🧠",
+    layout="centered"
+)
 
+# =====================================================
+# CONSTANTS
+# =====================================================
 IMG_SIZE = (224, 224)
-MODEL_FILENAME = 'Imp_ENSStrokeNet35.keras'
+MODEL_FILENAME = "Imp_ENSStrokeNet35.keras"
+GOOGLE_DRIVE_FILE_ID = "1PyI0XiQh7dZPj9_jq1h85uZMmbT43ZSS"
 
-# --- Google Drive Link for Model Download ---
-GOOGLE_DRIVE_FILE_ID = '1PyI0XiQh7dZPj9_jq1h85uZMmbT43ZSS' # <--- IMPORTANT: Update this!
+# Class names — ปรับให้ตรงกับ model ของคุณ
+# ตรวจสอบจาก training: class_indices จาก flow_from_directory
+# ปกติ flow_from_directory จะเรียงตาม alphabet
+CLASS_NAMES = ['Normal', 'Stroke']  # <-- ปรับถ้าจำเป็น
 
-# Cache the model loading to ensure it's loaded only once per session
-@st.cache_resource
-def load_keras_model(file_id):
-    """Downloads and loads the Keras model from Google Drive."""
-    st.write("Downloading model... This may take a moment.")
+# =====================================================
+# LOAD MODEL (cached)
+# =====================================================
+@st.cache_resource(show_spinner=False)
+def load_model():
+    """Download model from Google Drive and load it."""
+    import tensorflow as tf
+
+    model_path = os.path.join("/tmp", MODEL_FILENAME)
+
+    # ถ้ายังไม่มีไฟล์ใน /tmp ให้ download
+    if not os.path.exists(model_path):
+        try:
+            import gdown
+            with st.spinner("⏬ Downloading model (500MB)... Please wait..."):
+                url = f"https://drive.google.com/uc?id={GOOGLE_DRIVE_FILE_ID}"
+                gdown.download(url, model_path, quiet=False, fuzzy=True)
+
+            # ตรวจสอบว่า download สำเร็จและไฟล์ถูกต้อง
+            if not os.path.exists(model_path):
+                st.error("❌ Download failed: File not found after download.")
+                return None
+
+            file_size_mb = os.path.getsize(model_path) / (1024 * 1024)
+            if file_size_mb < 10:  # ถ้าไฟล์เล็กกว่า 10MB แสดงว่า download ผิดพลาด
+                st.error(
+                    f"❌ Downloaded file is too small ({file_size_mb:.1f} MB). "
+                    "Likely a Google Drive error page, not the model file. "
+                    "Please check that the file is shared publicly."
+                )
+                os.remove(model_path)  # ลบไฟล์ผิดออก
+                return None
+
+            st.success(f"✅ Model downloaded! ({file_size_mb:.1f} MB)")
+
+        except Exception as e:
+            st.error(f"❌ Error downloading model: {e}")
+            return None
+
+    # Load model
     try:
-        # Construct the direct download URL for Google Drive
-        # This URL bypasses browser UI and initiates direct download
-        drive_url = f'https://drive.google.com/uc?export=download&id={file_id}'
-        response = requests.get(drive_url, stream=True)
-        response.raise_for_status() # Raise an exception for HTTP errors
-
-        # Save the model to a temporary file
-        model_path = os.path.join(os.getcwd(), MODEL_FILENAME)
-        with open(model_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-
-        st.success(f"Model downloaded to {model_path}")
-
-        # Load the model
-        model = tf.keras.models.load_model(model_path)
-        st.success("Model loaded successfully!")
+        with st.spinner("🔄 Loading model into memory..."):
+            model = tf.keras.models.load_model(model_path)
+        st.success("✅ Model loaded successfully!")
         return model
-    except requests.exceptions.RequestException as e:
-        st.error(f"Error downloading model from Google Drive: {e}")
-        st.warning("Please ensure the Google Drive file ID is correct and the file is shared publicly ('Anyone with the link').")
-        return None
+
     except Exception as e:
-        st.error(f"Error loading model: {e}")
-        st.warning("Make sure your Keras model is compatible with the TensorFlow version used by Streamlit Cloud.")
+        st.error(f"❌ Error loading model: {e}")
+        st.warning(
+            "Possible causes:\n"
+            "1. Model was saved with a different TensorFlow version\n"
+            "2. Model file is corrupted\n"
+            "3. Mixed precision layers incompatibility"
+        )
         return None
 
-# --- Main Streamlit App ---
-st.title("Stroke Prediction with ENSStrokeNet35")
-st.write("Upload a brain MRI image to get a stroke prediction.")
 
-# Load the model
-model = load_keras_model(GOOGLE_DRIVE_FILE_ID)
+# =====================================================
+# PREPROCESSING
+# =====================================================
+def preprocess_image(uploaded_file):
+    """Preprocess uploaded image for model prediction."""
+    img = Image.open(uploaded_file).convert("RGB")
+    img = img.resize(IMG_SIZE, Image.LANCZOS)
+    img_array = np.array(img, dtype=np.float32)
+    img_array = img_array / 255.0          # Rescale [0, 1]
+    img_array = np.expand_dims(img_array, axis=0)  # Add batch dim → (1, 224, 224, 3)
+    return img_array
+
+
+# =====================================================
+# MAIN UI
+# =====================================================
+st.title("🧠 Stroke Detection")
+st.subheader("Powered by ENSStrokeNet35")
+st.markdown("---")
+
+# Sidebar
+st.sidebar.header("ℹ️ About")
+st.sidebar.info(
+    "**ENSStrokeNet35** is a deep learning model trained to detect "
+    "stroke from brain MRI images.\n\n"
+    "**How to use:**\n"
+    "1. Wait for model to load\n"
+    "2. Upload a brain MRI image\n"
+    "3. View prediction result\n\n"
+    "⚠️ **Disclaimer:** For research/demo purposes only. "
+    "Not a substitute for professional medical diagnosis."
+)
+
+st.sidebar.markdown("---")
+st.sidebar.markdown(f"**Classes:** {', '.join(CLASS_NAMES)}")
+st.sidebar.markdown(f"**Input Size:** {IMG_SIZE}×{IMG_SIZE} px")
+
+# Load model
+model = load_model()
 
 if model is None:
-    st.stop() # Stop if model couldn't be loaded
+    st.error(
+        "🚨 Model could not be loaded. Please check:\n"
+        "1. Google Drive file ID is correct\n"
+        "2. File is shared as 'Anyone with the link'\n"
+        "3. Restart the app and try again"
+    )
+    st.stop()
 
-# File uploader
-uploaded_file = st.file_uploader("Choose an MRI image...", type=["jpg", "jpeg", "png"])
+st.markdown("---")
+
+# =====================================================
+# FILE UPLOADER & PREDICTION
+# =====================================================
+st.subheader("📤 Upload Brain MRI Image")
+uploaded_file = st.file_uploader(
+    "Choose an image file",
+    type=["jpg", "jpeg", "png"],
+    help="Upload a brain MRI scan image (JPG or PNG format)"
+)
 
 if uploaded_file is not None:
-    # Display the uploaded image
-    st.image(uploaded_file, caption="Uploaded Image", use_column_width=True)
-    st.write("")
-    st.write("Classifying...")
+    # Layout: 2 columns
+    col1, col2 = st.columns(2)
 
-    # Preprocess the image
-    try:
-        img = image.load_img(uploaded_file, target_size=IMG_SIZE)
-        img_array = image.img_to_array(img)
-        img_array = np.expand_dims(img_array, axis=0) # Create a batch
-        img_array = img_array / 255.0 # Rescale as per your test_datagen
+    with col1:
+        st.markdown("**Uploaded Image:**")
+        st.image(uploaded_file, caption=uploaded_file.name, use_column_width=True)
 
-        # Make prediction
-        prediction = model.predict(img_array)
-        
-        # Interpret prediction (assuming categorical output for simplicity)
-        class_names = ['Normal', 'Stroke'] # Adjust based on your actual class names
-        
-        # If your model outputs probabilities for multiple classes:
-        predicted_class_index = np.argmax(prediction, axis=1)
-        confidence = prediction[predicted_class_index]
-        predicted_class_name = class_names[predicted_class_index]
+    with col2:
+        st.markdown("**Prediction Result:**")
 
-        st.subheader(f"Prediction: **{predicted_class_name}**")
-        st.write(f"Confidence: {confidence:.2f}")
+        try:
+            import tensorflow as tf
 
-        if predicted_class_name == 'Stroke':
-            st.error("Likely Stroke Detected! Please consult a medical professional immediately.")
-        else:
-            st.success("No Stroke Detected. However, this is a model prediction, not medical advice.")
+            # Preprocess
+            img_array = preprocess_image(uploaded_file)
 
-    except Exception as e:
-        st.error(f"Error processing image or making prediction: {e}")
-        st.write("Please ensure the uploaded image is valid and try again.")
+            # Predict
+            with st.spinner("🔍 Analyzing..."):
+                prediction = model.predict(img_array, verbose=0)
 
-st.sidebar.header("About")
-st.sidebar.info(
-    "This Streamlit application uses a pre-trained Keras model (ENSStrokeNet35) "
-    "to predict the presence of stroke from brain MRI images. "
-    "The model is downloaded from Google Drive at runtime."
-    "\n\n**Disclaimer:** This tool is for demonstration purposes only and "
-    "should not be used as a substitute for professional medical advice."
-)
+            # ---- Interpret results ----
+            num_classes = prediction.shape
+
+            if num_classes == 2:
+                # Binary classification (2 classes)
+                predicted_index = int(np.argmax(prediction, axis=1))
+                confidence = float(prediction[predicted_index])
+                predicted_class = CLASS_NAMES[predicted_index]
+
+            elif num_classes == 1:
+                # Single sigmoid output
+                prob = float(prediction)
+                predicted_index = 1 if prob >= 0.5 else 0
+                confidence = prob if predicted_index == 1 else 1 - prob
+                predicted_class = CLASS_NAMES[predicted_index]
+
+            else:
+                # Multi-class (มากกว่า 2 class)
+                predicted_index = int(np.argmax(prediction, axis=1))
+                confidence = float(prediction[predicted_index])
+                predicted_class = (
+                    CLASS_NAMES[predicted_index]
+                    if predicted_index < len(CLASS_NAMES)
+                    else f"Class {predicted_index}"
+                )
+
+            # ---- Display result ----
+            if predicted_class == 'Stroke':
+                st.error(f"🔴 **{predicted_class}**")
+                st.metric("Confidence", f"{confidence * 100:.1f}%")
+                st.warning(
+                    "⚠️ Stroke indicators detected. "
+                    "Please consult a medical professional immediately."
+                )
+            else:
+                st.success(f"🟢 **{predicted_class}**")
+                st.metric("Confidence", f"{confidence * 100:.1f}%")
+                st.info(
+                    "✅ No stroke indicators detected. "
+                    "This is a model prediction, not medical advice."
+                )
+
+            # Show all class probabilities
+            st.markdown("**Class Probabilities:**")
+            for i, name in enumerate(CLASS_NAMES):
+                if i < prediction.shape:
+                    prob_val = float(prediction[i])
+                    st.progress(prob_val, text=f"{name}: {prob_val * 100:.1f}%")
+
+        except Exception as e:
+            st.error(f"❌ Error during prediction: {e}")
+            st.exception(e)  # Show full traceback for debugging
+
+else:
+    # Placeholder when no image uploaded
+    st.info("👆 Please upload a brain MRI image to get started.")
