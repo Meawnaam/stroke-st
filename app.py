@@ -23,9 +23,6 @@ IMG_SIZE = (224, 224)
 MODEL_FILENAME = 'Imp_ENSStrokeNet35.keras'
 
 # --- Google Drive Link for Model Download ---
-# Replace 'YOUR_GOOGLE_DRIVE_FILE_ID' with the actual ID from your shared link.
-# Example: https://drive.google.com/file/d/1PyI0XiQh7dZPj9_jq1h85uZMmbT43ZSS/view?usp=sharing
-# The ID is '1PyI0XiQh7dZPj9_jq1h85uZMmbT43ZSS'
 GOOGLE_DRIVE_FILE_ID = '1PyI0XiQh7dZPj9_jq1h85uZMmbT43ZSS' # <--- IMPORTANT: Update this!
 
 # Cache the model loading to ensure it's loaded only once per session
