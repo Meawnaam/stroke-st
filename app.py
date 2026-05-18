@@ -35,7 +35,8 @@ def download_model() -> bool:
         if size_mb < 50:
             with open(MODEL_PATH, "r", errors="ignore") as f:
                 preview = f.read(300)
-            st.error(f"❌ File too small ({size_mb:.2f} MB)\n```\n{preview}\n```")
+            st.error(f"❌ File too small ({size_mb:.2f} MB)\n```\n{preview}\n
+```")
             os.remove(MODEL_PATH)
             return False
         st.success(f"✅ Downloaded! ({size_mb:.1f} MB)")
@@ -53,7 +54,11 @@ def load_model():
     from tensorflow.keras import mixed_precision
     import keras
 
-    mixed_precision.set_global_policy('mixed_float16')
+    # ตั้งค่า mixed precision 
+    try:
+        mixed_precision.set_global_policy('mixed_float16')
+    except Exception:
+        pass
 
     if not os.path.exists(MODEL_PATH):
         if not download_model():
@@ -89,9 +94,8 @@ def load_model():
 
 def preprocess_image(uploaded_file) -> np.ndarray:
     img       = Image.open(uploaded_file).convert("RGB")
-    img       = img.resize(IMG_SIZE, Image.LANCZOS)
-    arr       = np.array(img, dtype=np.float32) / 255.0
-    arr       = arr.astype('float16')
+    img       = img.resize(IMG_SIZE, Image.Resampling.LANCZOS) # อัปเดตเพื่อให้รองรับ Pillow เวอร์ชันใหม่ๆ
+    arr       = np.array(img, dtype=np.float32) / 255.0        # แนะนำให้ใช้ float32 เพื่อความเสถียรในการ Predict บน Cloud
     arr       = np.expand_dims(arr, axis=0)
     return arr
 
@@ -100,9 +104,9 @@ def predict(model, img_array: np.ndarray) -> dict:
     raw  = model.predict(img_array, verbose=0)
     pred = raw.astype(np.float32).flatten()
 
-    # pred = no_stroke, pred = stroke
-    p0 = float(pred)
-    p1 = float(pred)
+    # สมมติฐาน: โมเดลเป็นแบบ Binary Output (1 Node โอกาสเกิด Stroke)
+    p1 = float(pred[0])
+    p0 = float(1.0 - p1) # โอกาสไม่เกิดโรค คือ 1 - โอกาสเกิดโรค
 
     p0 = float(np.clip(p0, 0.0, 1.0))
     p1 = float(np.clip(p1, 0.0, 1.0))
@@ -139,16 +143,8 @@ with st.sidebar:
     st.markdown(f"**Input Size:** {IMG_SIZE} × {IMG_SIZE} px")
     st.markdown(f"**Stroke Threshold:** `{STROKE_THRESHOLD}`")
     st.markdown("---")
-    with st.expander("🔧 Debug Info"):
-        exists = os.path.exists(MODEL_PATH)
-        st.code(
-            f"FILE        : {MODEL_PATH}\n"
-            f"exists      : {exists}\n"
-            f"size        : "
-            f"{os.path.getsize(MODEL_PATH)/1e6:.1f} MB" if exists
-            else f"FILE        : {MODEL_PATH}\nexists      : False"
-        )
 
+# เรียกโหลดโมเดลก่อนที่จะทำ Debug Info ด้านล่าง เพื่อป้องกัน Error ตอนรันครั้งแรก
 model = load_model()
 
 if model is None:
@@ -157,11 +153,24 @@ if model is None:
         "1. Check Google Drive File ID\n"
         "2. File must be shared as **'Anyone with the link'**\n"
         "3. Click **Rerun**\n\n"
+        "4. หรืออาจเกิดจาก RAM บน Cloud (เช่น Streamlit Community Cloud) เต็ม เนื่องจากโมเดลมีขนาดใหญ่\n\n"
         f"File ID: `{FILE_ID}`"
     )
     st.stop()
 
+# แสดง Debug ข้อมูลโมเดลหลังจากมั่นใจว่าโหลดโมเดลสำเร็จแล้ว
 with st.sidebar:
+    with st.expander("🔧 Debug Info"):
+        exists = os.path.exists(MODEL_PATH)
+        if exists:
+            st.code(
+                f"FILE        : {MODEL_PATH}\n"
+                f"exists      : {exists}\n"
+                f"size        : {os.path.getsize(MODEL_PATH)/1e6:.1f} MB"
+            )
+        else:
+            st.code(f"FILE        : {MODEL_PATH}\nexists      : False")
+
     with st.expander("📊 Model Info"):
         try:
             st.code(
