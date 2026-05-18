@@ -165,11 +165,7 @@ def preprocess_image(uploaded_file) -> np.ndarray:
 # =====================================================
 def predict(model, img_array: np.ndarray) -> dict:
     """
-    Run prediction and handle all possible output shapes:
-      - (1, 2) → Categorical softmax  [no_stroke, stroke]
-      - (1, 1) → Binary sigmoid
-      - (2,)   → Flat array
-      - (1,)   → Single value
+    Run prediction and handle all possible output shapes.
     """
     raw_predictions = model.predict(img_array, verbose=0)
 
@@ -177,42 +173,34 @@ def predict(model, img_array: np.ndarray) -> dict:
     predictions = raw_predictions.astype(np.float32)
 
     shape = predictions.shape
+    ndim  = predictions.ndim
 
-    # --- Handle ทุก shape ---
-    if predictions.ndim == 1:
-        # Shape: (N,)
-        if len(predictions) == 1:
-            # Single sigmoid
-            stroke_prob    = float(predictions)
-            no_stroke_prob = 1.0 - stroke_prob
-        elif len(predictions) >= 2:
-            # Flat categorical [no_stroke, stroke]
-            no_stroke_prob = float(predictions)
-            stroke_prob    = float(predictions)
-        else:
-            raise ValueError(f"Unexpected shape: {shape}")
+    # --- Debug แสดง shape จริง ---
+    st.write(f"🔍 shape: `{shape}` | ndim: `{ndim}`")
+    st.write(f"🔍 values: `{predictions}`")
 
-    elif predictions.ndim == 2:
-        # Shape: (1, N)
-        if predictions.shape == 1:
-            # Single sigmoid
-            stroke_prob    = float(predictions[0, 0])
-            no_stroke_prob = 1.0 - stroke_prob
-        elif predictions.shape >= 2:
-            # Categorical [no_stroke, stroke]
-            no_stroke_prob = float(predictions[0, 0])
-            stroke_prob    = float(predictions[0, 1])
-        else:
-            raise ValueError(f"Unexpected shape: {shape}")
+    # --- Flatten ให้เป็น 1D ก่อนเสมอ ---
+    flat = predictions.flatten()   # shape ใดก็ได้ → (N,)
+    n    = len(flat)
+
+    if n == 1:
+        # Binary sigmoid → single probability
+        stroke_prob    = float(flat)
+        no_stroke_prob = 1.0 - stroke_prob
+
+    elif n >= 2:
+        # Categorical → [no_stroke, stroke]
+        no_stroke_prob = float(flat)
+        stroke_prob    = float(flat)
 
     else:
-        raise ValueError(f"Unexpected ndim: {predictions.ndim}, shape: {shape}")
+        raise ValueError(f"Unexpected prediction output: shape={shape}, values={flat}")
 
     # Clamp ให้อยู่ใน [0, 1]
     stroke_prob    = float(np.clip(stroke_prob,    0.0, 1.0))
     no_stroke_prob = float(np.clip(no_stroke_prob, 0.0, 1.0))
 
-    # ใช้ threshold 0.55 เหมือน training
+    # Threshold 0.55 เหมือน training
     predicted_index = 1 if stroke_prob > STROKE_THRESHOLD else 0
     predicted_class = CLASS_NAMES[predicted_index]
     confidence      = stroke_prob if predicted_index == 1 else no_stroke_prob
