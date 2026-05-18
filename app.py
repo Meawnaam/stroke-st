@@ -154,20 +154,21 @@ def preprocess_image(uploaded_file) -> np.ndarray:
 # =====================================================
 def predict(model, img_array: np.ndarray) -> dict:
     """
-    Predict — output shape confirmed: (1, 2)
-    flat = no_stroke prob
-    flat = stroke prob
+    Predict — output shape: (1, 2)
+    index 0 = no_stroke
+    index 1 = stroke
     """
     raw_predictions = model.predict(img_array, verbose=0)
 
     # float16 → float32
     predictions = raw_predictions.astype(np.float32)
 
-    # Flatten: (1, 2) → [no_stroke_prob, stroke_prob]
+    # (1, 2) → 1D array [no_stroke_prob, stroke_prob]
     flat = predictions.flatten()
 
-    no_stroke_prob = float(flat)
-    stroke_prob    = float(flat)
+    # ดึงแต่ละค่าด้วย index ชัดเจน
+    no_stroke_prob = float(flat)   # ← 
+    stroke_prob    = float(flat)   # ← 
 
     # Clamp [0, 1]
     stroke_prob    = float(np.clip(stroke_prob,    0.0, 1.0))
@@ -187,8 +188,6 @@ def predict(model, img_array: np.ndarray) -> dict:
         "raw_shape"       : str(predictions.shape),
         "raw_values"      : predictions.tolist(),
     }
-
-
 # =====================================================
 # MAIN UI
 # =====================================================
